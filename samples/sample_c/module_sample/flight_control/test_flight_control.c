@@ -36,9 +36,12 @@
 
 /* MicroGas Includes ----------------------------------------------------------*/
 #include "microgas_data.h"
+#include "microgas_sender.h"
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 /* Private types -------------------------------------------------------------*/
 typedef struct {
@@ -78,6 +81,8 @@ static const T_DjiTestFlightControlDisplayModeStr s_flightControlDisplayModeStr[
 
 /* Private functions declaration ---------------------------------------------*/
 static int MiniHawk_ReadDjiData(MicroGasData *data);
+static uint32_t MiniHawk_NewBootId(void);
+static uint64_t MiniHawk_MonotonicMs(void);
 static void *MiniHawk_AcquisitionTask(void *arg);
 static uint8_t DjiTest_FlightControlGetDisplayModeIndex(E_DjiFcSubscriptionDisplayMode displayMode);
 static T_DjiFcSubscriptionFlightStatus DjiTest_FlightControlGetValueOfFlightStatus(void);
@@ -277,10 +282,37 @@ static int MiniHawk_ReadDjiData(MicroGasData *data)
     return 0;
 }
 
+static uint32_t MiniHawk_NewBootId(void)
+{
+    uint32_t id = 0;
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (f != NULL) {
+        if (fread(&id, sizeof(id), 1, f) != 1) {
+            id = 0;
+        }
+        fclose(f);
+    }
+    if (id == 0) {
+        id = (uint32_t)time(NULL) ^ ((uint32_t)getpid() << 16);
+    }
+    return id;
+}
+
+static uint64_t MiniHawk_MonotonicMs(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+}
+
 static void *MiniHawk_AcquisitionTask(void *arg)
 {
     T_DjiOsalHandler *osal = DjiPlatform_GetOsalHandler();
     unsigned int skipped = 0;
+    /* boot_id fijo durante esta ejecucion; sequence sube por muestra nueva. */
+    const uint32_t bootId = MiniHawk_NewBootId();
+    const uint64_t startMonotonicMs = MiniHawk_MonotonicMs();
+    uint32_t sequence = 0;
     (void)arg;
 
     s_miniHawkStartResult = MicroGas_Sen66Init();
@@ -342,6 +374,24 @@ static void *MiniHawk_AcquisitionTask(void *arg)
                 data.pm10,
                 data.voc_index,
                 data.nox_index);
+
+            MicroGasMeasurement measurement = {
+                .co2_ppm = (float)data.co2_ppm,
+                .temperature_c = data.temperature_c,
+                .humidity_pct = data.humidity_rh,
+                .pm1_0 = data.pm1_0,
+                .pm2_5 = data.pm2_5,
+                .pm4_0 = data.pm4_0,
+                .pm10 = data.pm10,
+                .voc_index = data.voc_index,
+                .nox_index = data.nox_index,
+            };
+            T_DjiReturnCode sendResult = MicroGas_SendMeasurement(
+                bootId, ++sequence, MiniHawk_MonotonicMs() - startMonotonicMs, &measurement);
+            if (sendResult != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+                USER_LOG_WARN("MiniHawk: envio PSDK al control fallo 0x%08llX",
+                              (unsigned long long)sendResult);
+            }
 
             if (MicroGas_SaveCsv(&data) == 0) {
                 saved = true;
