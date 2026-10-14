@@ -300,7 +300,7 @@ void Application::DjiUser_ApplicationStart()
         throw std::runtime_error("Please run this sample on extension port or skyport v3.");
     }
 
-    returnCode = DjiCore_SetAlias("PSDK_APPALIAS");
+    returnCode = DjiCore_SetAlias("MicroGAS(DJI)");
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         throw std::runtime_error("Set alias error.");
     }

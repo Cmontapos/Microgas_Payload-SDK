@@ -23,6 +23,7 @@
  */
 
 /* Includes ------------------------------------------------------------------*/
+#include "flight_control/test_flight_control.h"
 #include <utils/util_misc.h>
 #include <widget_interaction_test/test_widget_interaction.h>
 #include "test_gimbal_manager.h"
@@ -79,6 +80,11 @@ T_DjiReturnCode DjiTest_GimbalManagerRunSample(E_DjiMountPosition mountPosition,
     E_DjiAircraftSeries aircraftSeries;
     bool gimbalAnglesSubscribedFlag = false;
 
+    returnCode = DjiTest_FlightControlInit();
+    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        return returnCode;
+    }
+
     returnCode = DjiAircraftInfo_GetBaseInfo(&baseInfo);
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Failed to get aircraft base info, return code 0x%08X", returnCode);
@@ -96,7 +102,8 @@ T_DjiReturnCode DjiTest_GimbalManagerRunSample(E_DjiMountPosition mountPosition,
         DJI_AIRCRAFT_SERIES_M4 == aircraftSeries ||
         DJI_AIRCRAFT_SERIES_M4D == aircraftSeries) {
         returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_GIMBAL_ANGLES, DJI_DATA_SUBSCRIPTION_TOPIC_50_HZ, NULL);
-        if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS &&
+            returnCode != DJI_ERROR_SUBSCRIPTION_MODULE_CODE_TOPIC_DUPLICATE) {
             USER_LOG_ERROR("Failed to subscribe topic %d, 0x%08X", DJI_FC_SUBSCRIPTION_TOPIC_GIMBAL_ANGLES, returnCode);
             goto out;
         }
@@ -178,7 +185,7 @@ T_DjiReturnCode DjiTest_GimbalManagerRunSample(E_DjiMountPosition mountPosition,
         }
     }
 
-    if (gimbalAnglesSubscribedFlag) {
+    if (gimbalAnglesSubscribedFlag && !MiniHawk_UsesFcSubscription()) {
         returnCode = DjiFcSubscription_UnSubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_GIMBAL_ANGLES);
         if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
             USER_LOG_ERROR("Failed to unsubscribe topic %d, 0x%08X", DJI_FC_SUBSCRIPTION_TOPIC_GIMBAL_ANGLES, returnCode);

@@ -61,6 +61,10 @@ int main(int argc, char **argv)
     T_DjiReturnCode returnCode;
     T_DjiTestApplyHighPowerHandler applyHighPowerHandler;
 
+    if (MiniHawk_StartAcquisition() != 0) {
+        USER_LOG_WARN("MiniHawk: no se pudo iniciar el registro; PSDK continua activo");
+    }
+
 start:
     std::cout
         << "\n"

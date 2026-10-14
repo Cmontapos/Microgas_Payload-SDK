@@ -27,6 +27,7 @@
 #include "test_waypoint_v2.h"
 #include "dji_waypoint_v2.h"
 #include "dji_fc_subscription.h"
+#include "flight_control/test_flight_control.h"
 #include "dji_logger.h"
 #include "dji_platform.h"
 #include "math.h"
@@ -120,12 +121,7 @@ T_DjiReturnCode DjiTest_WaypointV2RunSample(void)
 
     USER_LOG_INFO("--> Step 2: Subscribe gps fused data");
     DjiTest_WidgetLogAppend("--> Step 2: Subscribe gps fused data");
-    returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_POSITION_FUSED,
-                                                  DJI_DATA_SUBSCRIPTION_TOPIC_50_HZ, NULL);
-    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("Subscribe gps fused data failed, error code: 0x%08X", returnCode);
-        goto out;
-    }
+    /* POSITION_FUSED: se reutiliza la suscripcion de FlightControlInit. */
 
     USER_LOG_INFO("--> Step 3: Register waypoint V2 event and state callback\r\n");
     DjiTest_WidgetLogAppend("--> Step 3: Register waypoint V2 event and state callback\r\n");
@@ -403,7 +399,7 @@ static T_DjiReturnCode DjiTest_WaypointV2Init(void)
     osalHandler = DjiPlatform_GetOsalHandler();
     if (!osalHandler) return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
 
-    returnCode = DjiFcSubscription_Init();
+    returnCode = DjiTest_FlightControlInit();
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Init waypoint V2 data subscription module error, stat:0x%08llX", returnCode);
         return returnCode;
@@ -423,7 +419,8 @@ static T_DjiReturnCode DjiTest_WaypointV2DeInit(void)
 {
     T_DjiReturnCode returnCode;
 
-    returnCode = DjiFcSubscription_DeInit();
+    returnCode = MiniHawk_UsesFcSubscription() ? DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS :
+                 DjiFcSubscription_DeInit();
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Deinit waypoint V2 data subscription module error, stat:0x%08llX", returnCode);
         return returnCode;

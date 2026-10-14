@@ -27,6 +27,7 @@
 #include <dji_gimbal.h>
 #include "test_payload_gimbal_emu.h"
 #include "dji_fc_subscription.h"
+#include "flight_control/test_flight_control.h"
 #include "dji_logger.h"
 #include "dji_platform.h"
 #include "utils/util_misc.h"
@@ -128,12 +129,6 @@ T_DjiReturnCode DjiTest_GimbalStartService(void)
     s_commonHandler.SetMode = SetMode;
     s_commonHandler.Reset = Reset;
     s_commonHandler.FineTuneAngle = FineTuneAngle;
-
-    djiStat = DjiFcSubscription_Init();
-    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("init data subscription module error.");
-        return djiStat;
-    }
 
     if (osalHandler->MutexCreate(&s_commonMutex) != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("mutex create error");
@@ -393,16 +388,10 @@ static void *UserGimbal_Task(void *arg)
 
     USER_UTIL_UNUSED(arg);
 
-    djiStat = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_QUATERNION, DJI_DATA_SUBSCRIPTION_TOPIC_10_HZ,
-                                               NULL);
-    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        if (djiStat == DJI_ERROR_SUBSCRIPTION_MODULE_CODE_TOPIC_DUPLICATE) {
-            USER_LOG_WARN("Subscribe topic quaternion duplicate.");
-        } else {
-            USER_LOG_ERROR("Subscribe topic quaternion error.");
-        }
-    } else {
-        USER_LOG_DEBUG("Subscribe topic quaternion success.");
+    /* El servicio se registra antes de DjiCore_ApplicationStart. Esperar al
+     * flujo normal de FlightControl antes de leer el quaternion compartido. */
+    while (!MiniHawk_UsesFcSubscription()) {
+        osalHandler->TaskSleepMs(100);
     }
 
     while (1) {

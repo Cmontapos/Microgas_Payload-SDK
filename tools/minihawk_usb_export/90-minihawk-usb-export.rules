@@ -1,0 +1,2 @@
+# Ejecutar la copia fuera de udev, mediante un servicio por particion USB.
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{ID_FS_USAGE}=="filesystem", TAG+="systemd", ENV{SYSTEMD_WANTS}+="minihawk-usb-export@%k.service"

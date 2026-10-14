@@ -8,7 +8,7 @@
  * All information contained herein is, and remains, the property of DJI.
  * The intellectual and technical concepts contained herein are proprietary
  * to DJI and may be covered by U.S. and foreign patents, patents in process,
- * and protected by trade secret or copyright law.  Dissemination of this
+ * and protected by trade secret or copyright law. Dissemination of this
  * information, including but not limited to data and other proprietary
  * material(s) incorporated within the information, in any form, is strictly
  * prohibited without the express written consent of DJI.
@@ -32,6 +32,24 @@
 #include "dji_sdk_config.h"
 #include "file_binary_array_list_en.h"
 #include <stdarg.h>
+#include "flight_control/test_flight_control.h"
+#include <stdint.h>
+
+/* Rango de salida SEN66:
+ * https://sensirion.com/products/catalog/SEN66
+ */
+#define MINIHAWK_CO2_MAX_PPM     5000
+
+/*
+ * Barra de 30 posiciones.
+ *
+ * Ejemplo:
+ * [==========--------------------]
+ *
+ * Siempre contiene exactamente 30 caracteres.
+ */
+#define MINIHAWK_CO2_BAR_WIDTH   30
+
 
 /* Private constants ---------------------------------------------------------*/
 #define WIDGET_DIR_PATH_LEN_MAX         (256)
@@ -39,34 +57,114 @@
 #define WIDGET_LOG_STRING_MAX_SIZE      (64)
 #define WIDGET_LOG_LINE_MAX_NUM         (4)
 
+
 /* Private types -------------------------------------------------------------*/
 typedef struct {
     bool valid;
     char content[WIDGET_LOG_STRING_MAX_SIZE];
 } T_DjiTestWidgetLog;
 
+
 /* Private functions declaration ---------------------------------------------*/
-static T_DjiReturnCode DjiTestWidget_SetWidgetValue(E_DjiWidgetType widgetType, uint32_t index, int32_t value,
-                                                    void *userData);
-static T_DjiReturnCode DjiTestWidget_GetWidgetValue(E_DjiWidgetType widgetType, uint32_t index, int32_t *value,
-                                                    void *userData);
+static T_DjiReturnCode DjiTestWidget_SetWidgetValue(
+    E_DjiWidgetType widgetType,
+    uint32_t index,
+    int32_t value,
+    void *userData);
+
+static T_DjiReturnCode DjiTestWidget_GetWidgetValue(
+    E_DjiWidgetType widgetType,
+    uint32_t index,
+    int32_t *value,
+    void *userData);
+
 
 /* Private values ------------------------------------------------------------*/
 static T_DjiTaskHandle s_widgetTestThread;
+
 static bool s_isWidgetFileDirPathConfigured = false;
+
 static char s_widgetFileDirPath[DJI_FILE_PATH_SIZE_MAX] = {0};
-static T_DjiTestWidgetLog s_djiTestWidgetLog[WIDGET_LOG_LINE_MAX_NUM] = {0};
+
+static T_DjiTestWidgetLog
+    s_djiTestWidgetLog[WIDGET_LOG_LINE_MAX_NUM] = {0};
+
+
 static const T_DjiWidgetHandlerListItem s_widgetHandlerList[] = {
-    {0, DJI_WIDGET_TYPE_BUTTON,        DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {1, DJI_WIDGET_TYPE_LIST,          DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {2, DJI_WIDGET_TYPE_SWITCH,        DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {3, DJI_WIDGET_TYPE_SCALE,         DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {4, DJI_WIDGET_TYPE_BUTTON,        DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {5, DJI_WIDGET_TYPE_SCALE,         DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {6, DJI_WIDGET_TYPE_INT_INPUT_BOX, DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {7, DJI_WIDGET_TYPE_SWITCH,        DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
-    {8, DJI_WIDGET_TYPE_LIST,          DjiTestWidget_SetWidgetValue, DjiTestWidget_GetWidgetValue, NULL},
+
+    {
+        0,
+        DJI_WIDGET_TYPE_BUTTON,
+        DjiTestWidget_SetWidgetValue,
+        DjiTestWidget_GetWidgetValue,
+        NULL
+    },
+
+    {
+        1,
+        DJI_WIDGET_TYPE_LIST,
+        DjiTestWidget_SetWidgetValue,
+        DjiTestWidget_GetWidgetValue,
+        NULL
+    },
+
+    {
+        2,
+        DJI_WIDGET_TYPE_SWITCH,
+        DjiTestWidget_SetWidgetValue,
+        DjiTestWidget_GetWidgetValue,
+        NULL
+    },
+
+    {
+        3,
+        DJI_WIDGET_TYPE_SCALE,
+        DjiTestWidget_SetWidgetValue,
+        DjiTestWidget_GetWidgetValue,
+        NULL
+    },
+
+    {
+        4,
+        DJI_WIDGET_TYPE_BUTTON,
+        DjiTestWidget_SetWidgetValue,
+        DjiTestWidget_GetWidgetValue,
+        NULL
+    },
+
+    {
+        5,
+        DJI_WIDGET_TYPE_SCALE,
+        DjiTestWidget_SetWidgetValue,
+        DjiTestWidget_GetWidgetValue,
+        NULL
+    },
+
+    {
+        6,
+        DJI_WIDGET_TYPE_INT_INPUT_BOX,
+        DjiTestWidget_SetWidgetValue,
+        DjiTestWidget_GetWidgetValue,
+        NULL
+    },
+
+    {
+        7,
+        DJI_WIDGET_TYPE_SWITCH,
+        DjiTestWidget_SetWidgetValue,
+        DjiTestWidget_GetWidgetValue,
+        NULL
+    },
+
+    {
+        8,
+        DJI_WIDGET_TYPE_LIST,
+        DjiTestWidget_SetWidgetValue,
+        DjiTestWidget_GetWidgetValue,
+        NULL
+    },
 };
+
 
 static const char *s_widgetTypeNameArray[] = {
     "Unknown",
@@ -77,202 +175,578 @@ static const char *s_widgetTypeNameArray[] = {
     "Int input box"
 };
 
-static const uint32_t s_widgetHandlerListCount = sizeof(s_widgetHandlerList) / sizeof(T_DjiWidgetHandlerListItem);
-static int32_t s_widgetValueList[sizeof(s_widgetHandlerList) / sizeof(T_DjiWidgetHandlerListItem)] = {0};
+
+static const uint32_t s_widgetHandlerListCount =
+    sizeof(s_widgetHandlerList) /
+    sizeof(T_DjiWidgetHandlerListItem);
+
+
+static int32_t
+    s_widgetValueList[
+        sizeof(s_widgetHandlerList) /
+        sizeof(T_DjiWidgetHandlerListItem)
+    ] = {0};
+
+
+/*
+ * Construye el texto que se muestra en la ventana flotante.
+ *
+ * La barra siempre tiene exactamente MINIHAWK_CO2_BAR_WIDTH
+ * caracteres.
+ *
+ * '=' -> parte llena
+ * '-' -> parte vacía
+ *
+ * Ejemplo para 50%:
+ *
+ * [===============---------------]
+ *
+ */
+static void MiniHawk_BuildCo2Window(
+    char *buffer,
+    size_t bufferSize,
+    int32_t co2Ppm)
+{
+    char bar[MINIHAWK_CO2_BAR_WIDTH + 1];
+
+    /*
+     * Limitar el valor entre 0 y 5000 ppm.
+     */
+    int32_t scaledCo2;
+
+    if (co2Ppm < 0) {
+        scaledCo2 = 0;
+    } else {
+        scaledCo2 = USER_UTIL_MIN(
+            co2Ppm,
+            MINIHAWK_CO2_MAX_PPM);
+    }
+
+
+    /*
+     * Calcular cuántas posiciones de la barra
+     * deben aparecer llenas.
+     *
+     * Ejemplo:
+     *
+     * CO2 = 2500 ppm
+     *
+     * filled = 2500 * 30 / 5000
+     * filled = 15
+     *
+     */
+    int filled =
+        scaledCo2 *
+        MINIHAWK_CO2_BAR_WIDTH /
+        MINIHAWK_CO2_MAX_PPM;
+
+
+    /*
+     * Construir barra.
+     *
+     * IMPORTANTE:
+     *
+     * Siempre se escriben exactamente 30 caracteres.
+     *
+     * No se agregan caracteres cuando aumenta el CO2.
+     * Únicamente se reemplaza '-' por '='.
+     */
+    for (int i = 0;
+         i < MINIHAWK_CO2_BAR_WIDTH;
+         ++i) {
+
+        if (i < filled) {
+            bar[i] = '=';
+        } else {
+            bar[i] = '-';
+        }
+    }
+
+
+    /*
+     * Terminador de string.
+     */
+    bar[MINIHAWK_CO2_BAR_WIDTH] = '\0';
+
+
+    /*
+     * Construir mensaje.
+     */
+    if (co2Ppm < 0) {
+
+        snprintf(
+            buffer,
+            bufferSize,
+            "CO2: -- ppm\n"
+            "[%s]\n"
+            "Sin lectura SEN66",
+            bar);
+
+    } else {
+
+        float percentage =
+            scaledCo2 *
+            100.0f /
+            MINIHAWK_CO2_MAX_PPM;
+
+        snprintf(
+            buffer,
+            bufferSize,
+            "CO2: %d ppm\n"
+            "[%s]\n"
+            "%.1f%%",
+            (int)co2Ppm,
+            bar,
+            percentage);
+    }
+}
+
 
 /* Exported functions definition ---------------------------------------------*/
-
 
 void DjiTest_WidgetLogAppend(const char *fmt, ...)
 {
     va_list args;
+
     char string[WIDGET_LOG_STRING_MAX_SIZE];
+
     int32_t i;
 
+
     va_start(args, fmt);
-    vsnprintf(string, WIDGET_LOG_STRING_MAX_SIZE, fmt, args);
+
+    vsnprintf(
+        string,
+        WIDGET_LOG_STRING_MAX_SIZE,
+        fmt,
+        args);
+
     va_end(args);
 
-    for (i = 0; i < WIDGET_LOG_LINE_MAX_NUM; ++i) {
+
+    for (i = 0;
+         i < WIDGET_LOG_LINE_MAX_NUM;
+         ++i) {
+
         if (s_djiTestWidgetLog[i].valid == false) {
+
             s_djiTestWidgetLog[i].valid = true;
-            strcpy(s_djiTestWidgetLog[i].content, string);
+
+            strcpy(
+                s_djiTestWidgetLog[i].content,
+                string);
+
             break;
         }
     }
 
+
     if (i == WIDGET_LOG_LINE_MAX_NUM) {
-        for (i = 0; i < WIDGET_LOG_LINE_MAX_NUM - 1; i++) {
-            strcpy(s_djiTestWidgetLog[i].content, s_djiTestWidgetLog[i + 1].content);
+
+        for (i = 0;
+             i < WIDGET_LOG_LINE_MAX_NUM - 1;
+             i++) {
+
+            strcpy(
+                s_djiTestWidgetLog[i].content,
+                s_djiTestWidgetLog[i + 1].content);
         }
-        strcpy(s_djiTestWidgetLog[WIDGET_LOG_LINE_MAX_NUM - 1].content, string);
+
+        strcpy(
+            s_djiTestWidgetLog[
+                WIDGET_LOG_LINE_MAX_NUM - 1
+            ].content,
+            string);
     }
 }
+
 
 T_DjiReturnCode DjiTest_WidgetStartService(void)
 {
     T_DjiReturnCode djiStat;
-    T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
 
-    //Step 1 : Init DJI Widget
+    T_DjiOsalHandler *osalHandler =
+        DjiPlatform_GetOsalHandler();
+
+
+    /* Step 1 : Init DJI Widget */
     djiStat = DjiWidget_Init();
-    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("Dji test widget init error, stat = 0x%08llX", djiStat);
+
+    if (djiStat !=
+        DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+
+        USER_LOG_ERROR(
+            "Dji test widget init error, stat = 0x%08llX",
+            djiStat);
+
         return djiStat;
     }
+
 
 #ifdef SYSTEM_ARCH_LINUX
-    //Step 2 : Set UI Config (Linux environment)
-    char curFileDirPath[WIDGET_DIR_PATH_LEN_MAX];
-    char tempPath[WIDGET_DIR_PATH_LEN_MAX];
-    djiStat = DjiUserUtil_GetCurrentFileDirPath(__FILE__, WIDGET_DIR_PATH_LEN_MAX, curFileDirPath);
-    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("Get file current path error, stat = 0x%08llX", djiStat);
+
+    /* Step 2 : Set UI Config (Linux environment) */
+
+    char curFileDirPath[
+        WIDGET_DIR_PATH_LEN_MAX
+    ];
+
+    char tempPath[
+        WIDGET_DIR_PATH_LEN_MAX
+    ];
+
+
+    djiStat =
+        DjiUserUtil_GetCurrentFileDirPath(
+            __FILE__,
+            WIDGET_DIR_PATH_LEN_MAX,
+            curFileDirPath);
+
+
+    if (djiStat !=
+        DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+
+        USER_LOG_ERROR(
+            "Get file current path error, stat = 0x%08llX",
+            djiStat);
+
         return djiStat;
     }
 
-    if (s_isWidgetFileDirPathConfigured == true) {
-        snprintf(tempPath, WIDGET_DIR_PATH_LEN_MAX, "%swidget_file/en_big_screen", s_widgetFileDirPath);
+
+    if (s_isWidgetFileDirPathConfigured ==
+        true) {
+
+        snprintf(
+            tempPath,
+            WIDGET_DIR_PATH_LEN_MAX,
+            "%swidget_file/en_big_screen",
+            s_widgetFileDirPath);
+
     } else {
-        snprintf(tempPath, WIDGET_DIR_PATH_LEN_MAX, "%swidget_file/en_big_screen", curFileDirPath);
+
+        snprintf(
+            tempPath,
+            WIDGET_DIR_PATH_LEN_MAX,
+            "%swidget_file/en_big_screen",
+            curFileDirPath);
     }
 
-    //set default ui config path
-    USER_LOG_INFO("widget file: %s", tempPath);
-    djiStat = DjiWidget_RegDefaultUiConfigByDirPath(tempPath);
-    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("Add default widget ui config error, stat = 0x%08llX", djiStat);
+
+    /* Set default UI config path */
+
+    USER_LOG_INFO(
+        "widget file: %s",
+        tempPath);
+
+
+    djiStat =
+        DjiWidget_RegDefaultUiConfigByDirPath(
+            tempPath);
+
+
+    if (djiStat !=
+        DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+
+        USER_LOG_ERROR(
+            "Add default widget ui config error, stat = 0x%08llX",
+            djiStat);
+
         return djiStat;
     }
 
-    //set ui config for English language
-    djiStat = DjiWidget_RegUiConfigByDirPath(DJI_MOBILE_APP_LANGUAGE_ENGLISH,
-                                             DJI_MOBILE_APP_SCREEN_TYPE_BIG_SCREEN,
-                                             tempPath);
-    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("Add widget ui config error, stat = 0x%08llX", djiStat);
+
+    /* Set UI config for English language */
+
+    djiStat =
+        DjiWidget_RegUiConfigByDirPath(
+            DJI_MOBILE_APP_LANGUAGE_ENGLISH,
+            DJI_MOBILE_APP_SCREEN_TYPE_BIG_SCREEN,
+            tempPath);
+
+
+    if (djiStat !=
+        DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+
+        USER_LOG_ERROR(
+            "Add widget ui config error, stat = 0x%08llX",
+            djiStat);
+
         return djiStat;
     }
 
-    //set ui config for Chinese language
-    if (s_isWidgetFileDirPathConfigured == true) {
-        snprintf(tempPath, WIDGET_DIR_PATH_LEN_MAX, "%swidget_file/cn_big_screen", s_widgetFileDirPath);
+
+    /* Set UI config for Chinese language */
+
+    if (s_isWidgetFileDirPathConfigured ==
+        true) {
+
+        snprintf(
+            tempPath,
+            WIDGET_DIR_PATH_LEN_MAX,
+            "%swidget_file/cn_big_screen",
+            s_widgetFileDirPath);
+
     } else {
-        snprintf(tempPath, WIDGET_DIR_PATH_LEN_MAX, "%swidget_file/cn_big_screen", curFileDirPath);
+
+        snprintf(
+            tempPath,
+            WIDGET_DIR_PATH_LEN_MAX,
+            "%swidget_file/cn_big_screen",
+            curFileDirPath);
     }
 
-    djiStat = DjiWidget_RegUiConfigByDirPath(DJI_MOBILE_APP_LANGUAGE_CHINESE,
-                                             DJI_MOBILE_APP_SCREEN_TYPE_BIG_SCREEN,
-                                             tempPath);
-    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("Add widget ui config error, stat = 0x%08llX", djiStat);
+
+    djiStat =
+        DjiWidget_RegUiConfigByDirPath(
+            DJI_MOBILE_APP_LANGUAGE_CHINESE,
+            DJI_MOBILE_APP_SCREEN_TYPE_BIG_SCREEN,
+            tempPath);
+
+
+    if (djiStat !=
+        DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+
+        USER_LOG_ERROR(
+            "Add widget ui config error, stat = 0x%08llX",
+            djiStat);
+
         return djiStat;
     }
+
+
 #else
-    //Step 2 : Set UI Config (RTOS environment)
-    T_DjiWidgetBinaryArrayConfig enWidgetBinaryArrayConfig = {
-        .binaryArrayCount = g_EnBinaryArrayCount,
-        .fileBinaryArrayList = g_EnFileBinaryArrayList
-    };
 
-    //set default ui config
-    djiStat = DjiWidget_RegDefaultUiConfigByBinaryArray(&enWidgetBinaryArrayConfig);
-    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("Add default widget ui config error, stat = 0x%08llX", djiStat);
+    /* Step 2 : Set UI Config (RTOS environment) */
+
+    T_DjiWidgetBinaryArrayConfig
+        enWidgetBinaryArrayConfig = {
+
+            .binaryArrayCount =
+                g_EnBinaryArrayCount,
+
+            .fileBinaryArrayList =
+                g_EnFileBinaryArrayList
+        };
+
+
+    /* Set default UI config */
+
+    djiStat =
+        DjiWidget_RegDefaultUiConfigByBinaryArray(
+            &enWidgetBinaryArrayConfig);
+
+
+    if (djiStat !=
+        DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+
+        USER_LOG_ERROR(
+            "Add default widget ui config error, stat = 0x%08llX",
+            djiStat);
+
         return djiStat;
     }
+
 #endif
-    //Step 3 : Set widget handler list
-    djiStat = DjiWidget_RegHandlerList(s_widgetHandlerList, s_widgetHandlerListCount);
-    if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("Set widget handler list error, stat = 0x%08llX", djiStat);
+
+
+    /* Step 3 : Set widget handler list */
+
+    djiStat =
+        DjiWidget_RegHandlerList(
+            s_widgetHandlerList,
+            s_widgetHandlerListCount);
+
+
+    if (djiStat !=
+        DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+
+        USER_LOG_ERROR(
+            "Set widget handler list error, stat = 0x%08llX",
+            djiStat);
+
         return djiStat;
     }
 
-    //Step 4 : Run widget api sample task
-    if (osalHandler->TaskCreate("user_widget_task", DjiTest_WidgetTask, WIDGET_TASK_STACK_SIZE, NULL,
-                                &s_widgetTestThread) != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("Dji widget test task create error.");
-        return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+
+    /* Step 4 : Run widget API sample task */
+
+    if (osalHandler->TaskCreate(
+            "user_widget_task",
+            DjiTest_WidgetTask,
+            WIDGET_TASK_STACK_SIZE,
+            NULL,
+            &s_widgetTestThread)
+        != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+
+        USER_LOG_ERROR(
+            "Dji widget test task create error.");
+
+        return
+            DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
     }
 
-    return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
+
+    return
+        DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
 }
 
-T_DjiReturnCode DjiTest_WidgetSetConfigFilePath(const char *path)
+
+T_DjiReturnCode
+DjiTest_WidgetSetConfigFilePath(
+    const char *path)
 {
-    memset(s_widgetFileDirPath, 0, sizeof(s_widgetFileDirPath));
-    memcpy(s_widgetFileDirPath, path, USER_UTIL_MIN(strlen(path), sizeof(s_widgetFileDirPath) - 1));
-    s_isWidgetFileDirPathConfigured = true;
+    memset(
+        s_widgetFileDirPath,
+        0,
+        sizeof(s_widgetFileDirPath));
 
-    return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
+
+    memcpy(
+        s_widgetFileDirPath,
+        path,
+        USER_UTIL_MIN(
+            strlen(path),
+            sizeof(s_widgetFileDirPath) - 1));
+
+
+    s_isWidgetFileDirPathConfigured =
+        true;
+
+
+    return
+        DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
 }
+
 
 #ifndef __CC_ARM
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmissing-noreturn"
 #pragma GCC diagnostic ignored "-Wreturn-type"
 #pragma GCC diagnostic ignored "-Wformat"
+
 #endif
+
+
 void *DjiTest_WidgetTask(void *arg)
 {
-    char message[DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN];
-    uint32_t sysTimeMs = 0;
-    T_DjiReturnCode djiStat;
-    T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
+    T_DjiOsalHandler *osalHandler =
+        DjiPlatform_GetOsalHandler();
+
+
+    char message[
+        DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN + 1
+    ];
+
 
     USER_UTIL_UNUSED(arg);
 
+
     while (1) {
-        djiStat = osalHandler->GetTimeMs(&sysTimeMs);
-        if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-            USER_LOG_ERROR("Get system time ms error, stat = 0x%08llX", djiStat);
+
+        /*
+         * Leer CO2 del SEN66 y construir mensaje.
+         */
+        MiniHawk_BuildCo2Window(
+            message,
+            sizeof(message),
+            MiniHawk_GetCo2Ppm());
+
+
+        /*
+         * Mostrar mensaje en ventana flotante.
+         */
+        T_DjiReturnCode status =
+            DjiWidgetFloatingWindow_ShowMessage(
+                message);
+
+
+        if (status !=
+            DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+
+            USER_LOG_ERROR(
+                "Floating window error: 0x%08llX",
+                status);
         }
 
-        snprintf(message, DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN,
-                 "System time : %ld ms \r\n%s \r\n%s \r\n%s \r\n%s \r\n",
-                 sysTimeMs,
-                 s_djiTestWidgetLog[0].content,
-                 s_djiTestWidgetLog[1].content,
-                 s_djiTestWidgetLog[2].content,
-                 s_djiTestWidgetLog[3].content);
 
-        djiStat = DjiWidgetFloatingWindow_ShowMessage(message);
-        if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-            USER_LOG_ERROR("Floating window show message error, stat = 0x%08llX", djiStat);
-        }
-
-        osalHandler->TaskSleepMs(200);
+        /*
+         * Actualizar una vez por segundo.
+         */
+        osalHandler->TaskSleepMs(1000);
     }
+
+
+    return NULL;
 }
+
+
 #ifndef __CC_ARM
+
 #pragma GCC diagnostic pop
+
 #endif
 
-/* Private functions definition-----------------------------------------------*/
 
-static T_DjiReturnCode DjiTestWidget_SetWidgetValue(E_DjiWidgetType widgetType, uint32_t index, int32_t value,
-                                                    void *userData)
+/* Private functions definition ----------------------------------------------*/
+
+static T_DjiReturnCode
+DjiTestWidget_SetWidgetValue(
+    E_DjiWidgetType widgetType,
+    uint32_t index,
+    int32_t value,
+    void *userData)
 {
     USER_UTIL_UNUSED(userData);
 
-    DjiTest_WidgetLogAppend("Set widget: typ %s idx %d val %d\n", s_widgetTypeNameArray[widgetType], index, value);
-    USER_LOG_INFO("Set widget value, widgetType = %s, widgetIndex = %d ,widgetValue = %d",
-                  s_widgetTypeNameArray[widgetType], index, value);
-    s_widgetValueList[index] = value;
 
-    return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
+    DjiTest_WidgetLogAppend(
+        "Set widget: typ %s idx %d val %d\n",
+        s_widgetTypeNameArray[widgetType],
+        index,
+        value);
+
+
+    USER_LOG_INFO(
+        "Set widget value, widgetType = %s, widgetIndex = %d ,widgetValue = %d",
+        s_widgetTypeNameArray[widgetType],
+        index,
+        value);
+
+
+    __atomic_store_n(
+        &s_widgetValueList[index],
+        value,
+        __ATOMIC_RELAXED);
+
+
+    return
+        DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
 }
 
-static T_DjiReturnCode DjiTestWidget_GetWidgetValue(E_DjiWidgetType widgetType, uint32_t index, int32_t *value,
-                                                    void *userData)
+
+static T_DjiReturnCode
+DjiTestWidget_GetWidgetValue(
+    E_DjiWidgetType widgetType,
+    uint32_t index,
+    int32_t *value,
+    void *userData)
 {
     USER_UTIL_UNUSED(userData);
+
     USER_UTIL_UNUSED(widgetType);
 
-    *value = s_widgetValueList[index];
 
-    return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
+    *value =
+        __atomic_load_n(
+            &s_widgetValueList[index],
+            __ATOMIC_RELAXED);
+
+
+    return
+        DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
 }
+
 
 /****************** (C) COPYRIGHT DJI Innovations *****END OF FILE****/

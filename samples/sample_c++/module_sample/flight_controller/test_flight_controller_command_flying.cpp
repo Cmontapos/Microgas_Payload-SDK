@@ -32,6 +32,7 @@
 #include "dji_flight_controller.h"
 #include "dji_logger.h"
 #include "dji_fc_subscription.h"
+#include "flight_control/test_flight_control.h"
 #include "cmath"
 
 #ifdef OPEN_CV_INSTALLED
@@ -64,6 +65,7 @@ static T_DjiFlightControllerHomeLocation s_homeLocation = {0};
 static T_DjiFcSubscriptionGpsPosition s_gpsPosition = {0};
 static bool isFirstUpdateConfig = false;
 static bool isCommandFlyingTaskStart = false;
+static bool s_batterySubscribed[2] = {false, false};
 static uint32_t s_statusDisplayTaskCnt = 0;
 static T_DjiFcSubscriptionSingleBatteryInfo singleBatteryInfo1 = {0};
 static T_DjiFcSubscriptionSingleBatteryInfo singleBatteryInfo2 = {0};
@@ -294,54 +296,33 @@ static void *DjiUser_FlightControllerCommandFlyingTask(void *arg)
 {
     T_DjiReturnCode returnCode;
     T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
-    T_DjiFlightControllerRidInfo ridInfo = {0};
     T_DjiFlightControllerGeneralInfo generalInfo = {0};
 
-    ridInfo.latitude = 22.542812;
-    ridInfo.longitude = 113.958902;
-    ridInfo.altitude = 0;
-
-    returnCode = DjiFlightController_Init(ridInfo);
-    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("Init flight controller failed, errno = 0x%08llX", returnCode);
-        return NULL;
-    }
-
-    returnCode = DjiFcSubscription_Init();
+    returnCode = DjiTest_FlightControlInit();
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Init data subscription module failed, error code:0x%08llX", returnCode);
         return NULL;
     }
 
     /*! subscribe fc data */
-    returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_QUATERNION,
-                                                  DJI_DATA_SUBSCRIPTION_TOPIC_50_HZ,
-                                                  NULL);
-    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("Subscribe topic flight status failed, error code:0x%08llX", returnCode);
-        return NULL;
-    }
+    /* QUATERNION: se reutiliza la suscripcion de FlightControlInit. */
 
     returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_POSITION,
                                                   DJI_DATA_SUBSCRIPTION_TOPIC_5_HZ,
                                                   NULL);
-    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS &&
+        returnCode != DJI_ERROR_SUBSCRIPTION_MODULE_CODE_TOPIC_DUPLICATE) {
         USER_LOG_ERROR("Subscribe topic gps failed, error code:0x%08llX", returnCode);
         return NULL;
     }
 
-    returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_HEIGHT_FUSION,
-                                                  DJI_DATA_SUBSCRIPTION_TOPIC_10_HZ,
-                                                  NULL);
-    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("Subscribe topic altitude failed, error code:0x%08llX", returnCode);
-        return NULL;
-    }
+    /* HEIGHT_FUSION: se reutiliza la suscripcion de FlightControlInit. */
 
     returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_POSITION_VO,
                                                   DJI_DATA_SUBSCRIPTION_TOPIC_10_HZ,
                                                   NULL);
-    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS &&
+        returnCode != DJI_ERROR_SUBSCRIPTION_MODULE_CODE_TOPIC_DUPLICATE) {
         USER_LOG_ERROR("Subscribe topic altitude failed, error code:0x%08llX", returnCode);
         return NULL;
     }
@@ -349,9 +330,20 @@ static void *DjiUser_FlightControllerCommandFlyingTask(void *arg)
     returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_CONTROL_DEVICE,
                                                   DJI_DATA_SUBSCRIPTION_TOPIC_5_HZ,
                                                   NULL);
-    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS &&
+        returnCode != DJI_ERROR_SUBSCRIPTION_MODULE_CODE_TOPIC_DUPLICATE) {
         USER_LOG_ERROR("Subscribe topic altitude failed, error code:0x%08llX", returnCode);
         return NULL;
+    }
+
+    const E_DjiFcSubscriptionTopic batteryTopics[] = {
+        DJI_FC_SUBSCRIPTION_TOPIC_BATTERY_SINGLE_INFO_INDEX1,
+        DJI_FC_SUBSCRIPTION_TOPIC_BATTERY_SINGLE_INFO_INDEX2
+    };
+    for (int battery = 0; battery < 2; ++battery) {
+        returnCode = DjiFcSubscription_SubscribeTopic(batteryTopics[battery], DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ, NULL);
+        s_batterySubscribed[battery] = returnCode == DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS ||
+                                      returnCode == DJI_ERROR_SUBSCRIPTION_MODULE_CODE_TOPIC_DUPLICATE;
     }
 
     osalHandler->TaskSleepMs(1000);
@@ -374,7 +366,7 @@ static void *DjiUser_FlightControllerCommandFlyingTask(void *arg)
         return NULL;
     }
 
-    isCommandFlyingTaskStart = true;
+    __atomic_store_n(&isCommandFlyingTaskStart, true, __ATOMIC_RELEASE);
 
     while (true) {
         s_inputFlag++;
@@ -397,7 +389,7 @@ static void *DjiUser_FlightControllerStatusDisplayTask(void *arg)
     T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
 
     while (1) {
-        if (isCommandFlyingTaskStart == false) {
+        if (!__atomic_load_n(&isCommandFlyingTaskStart, __ATOMIC_ACQUIRE)) {
             continue;
         }
 #ifdef OPEN_CV_INSTALLED
@@ -748,7 +740,10 @@ static T_DjiFcSubscriptionSingleBatteryInfo DjiUser_FlightControlGetValueOfBatte
 {
     T_DjiReturnCode djiStat;
     T_DjiDataTimestamp timestamp = {0};
-    T_DjiFcSubscriptionSingleBatteryInfo singleBatteryInfo;
+    T_DjiFcSubscriptionSingleBatteryInfo singleBatteryInfo = {0};
+    if (!s_batterySubscribed[0]) {
+        return singleBatteryInfo;
+    }
 
     djiStat = DjiFcSubscription_GetLatestValueOfTopic(DJI_FC_SUBSCRIPTION_TOPIC_BATTERY_SINGLE_INFO_INDEX1,
                                                       (uint8_t *) &singleBatteryInfo,
@@ -769,7 +764,10 @@ static T_DjiFcSubscriptionSingleBatteryInfo DjiUser_FlightControlGetValueOfBatte
 {
     T_DjiReturnCode djiStat;
     T_DjiDataTimestamp timestamp = {0};
-    T_DjiFcSubscriptionSingleBatteryInfo singleBatteryInfo;
+    T_DjiFcSubscriptionSingleBatteryInfo singleBatteryInfo = {0};
+    if (!s_batterySubscribed[1]) {
+        return singleBatteryInfo;
+    }
 
     djiStat = DjiFcSubscription_GetLatestValueOfTopic(DJI_FC_SUBSCRIPTION_TOPIC_BATTERY_SINGLE_INFO_INDEX2,
                                                       (uint8_t *) &singleBatteryInfo,

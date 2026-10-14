@@ -45,12 +45,7 @@ T_DjiReturnCode DjiTest_InterestPointRunSample(void)
     T_DjiReturnCode returnCode;
     T_DjiInterestPointSettings interestPointSettings = {0};
     T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
-    T_DjiFlightControllerRidInfo ridInfo = {0};
     T_DjiAircraftInfoBaseInfo aircraftInfoBaseInfo = {0};
-
-    ridInfo.latitude = 22.542812;
-    ridInfo.longitude = 113.958902;
-    ridInfo.altitude = 10;
 
     returnCode = DjiAircraftInfo_GetBaseInfo(&aircraftInfoBaseInfo);
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
@@ -58,7 +53,7 @@ T_DjiReturnCode DjiTest_InterestPointRunSample(void)
         return DJI_ERROR_SYSTEM_MODULE_CODE_SYSTEM_ERROR;
     }
 
-    returnCode = DjiFlightController_Init(ridInfo);
+    returnCode = DjiTest_FlightControlInit();
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Flight control init failed, errno=%lld", returnCode);
         return returnCode;
@@ -130,7 +125,8 @@ point_deinit:
     }
 
 controller_deinit:
-    returnCode = DjiFlightController_DeInit();
+    returnCode = MiniHawk_UsesFcSubscription() ? DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS :
+                 DjiFlightController_DeInit();
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Flight control init failed, errno=%lld", returnCode);
     }

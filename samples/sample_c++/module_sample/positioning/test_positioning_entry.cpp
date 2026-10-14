@@ -23,6 +23,7 @@
  */
 
 /* Includes ------------------------------------------------------------------*/
+#include "flight_control/test_flight_control.h"
 #include <iostream>
 #include <fc_subscription/test_fc_subscription.h>
 #include "positioning/test_positioning.h"
@@ -111,7 +112,7 @@ T_DjiReturnCode DjiTest_RunOnboardRTKSample(void)
 
    USER_LOG_INFO("--> Step 1: Init Sample");
 
-    djiStat = DjiFcSubscription_Init();
+    djiStat = DjiTest_FlightControlInit();
     if (djiStat != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("init data subscription module error.");
         return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;

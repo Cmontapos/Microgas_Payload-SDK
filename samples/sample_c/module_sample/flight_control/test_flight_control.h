@@ -62,6 +62,13 @@ typedef struct {
 /* Exported types ------------------------------------------------------------*/
 
 /* Exported functions --------------------------------------------------------*/
+/* Arrancar una vez despues de DjiCore_ApplicationStart; no controla el vuelo. */
+int MiniHawk_StartAcquisition(void);
+bool MiniHawk_UsesFcSubscription(void);
+/* Ultima lectura real del SEN66; -1 si no hay una muestra valida. */
+int32_t MiniHawk_GetCo2Ppm(void);
+/* Inicializacion unica compartida por los samples; conserva el modulo. */
+T_DjiReturnCode DjiTest_FlightControlInit(void);
 T_DjiReturnCode DjiTest_FlightControlRunSample(E_DjiTestFlightCtrlSampleSelect flightCtrlSampleSelect);
 void DjiTest_FlightControlVelocityAndYawRateCtrl(const T_DjiTestFlightControlVector3f offsetDesired, float yawRate,
                                                  uint32_t timeMs);

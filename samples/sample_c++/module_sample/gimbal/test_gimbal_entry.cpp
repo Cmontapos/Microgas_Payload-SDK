@@ -25,6 +25,7 @@
  */
 
 /* Includes ------------------------------------------------------------------*/
+#include "flight_control/test_flight_control.h"
 #include <stdexcept>
 #include "test_gimbal_entry.hpp"
 #include "dji_logger.h"
@@ -76,6 +77,10 @@ void DjiTest_GimbalManagerShowSampleSelectList(const char **SampleList, uint8_t 
 /* Exported functions definition ---------------------------------------------*/
 void DjiUser_RunGimbalManagerSample(void)
 {
+    if (DjiTest_FlightControlInit() != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("Flight control subscriptions are not ready.");
+        return;
+    }
     T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
     char inputTestCase;
     char mountPosition;
@@ -257,13 +262,14 @@ start:
 
             if (aircraftSeries == DJI_AIRCRAFT_SERIES_M300 || aircraftSeries == DJI_AIRCRAFT_SERIES_M350) {
                 returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_IMU_ATTI_NAVI_DATA_WITH_TIMESTAMP, DJI_DATA_SUBSCRIPTION_TOPIC_50_HZ, NULL);
-                if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+                if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS &&
+            returnCode != DJI_ERROR_SUBSCRIPTION_MODULE_CODE_TOPIC_DUPLICATE) {
                     USER_LOG_ERROR("DjiFcSubscription_SubscribeTopic %d return %d",
                                    DJI_FC_SUBSCRIPTION_TOPIC_IMU_ATTI_NAVI_DATA_WITH_TIMESTAMP, returnCode);
                     goto end;
                 }
 
-                returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_QUATERNION, DJI_DATA_SUBSCRIPTION_TOPIC_50_HZ, NULL);
+                returnCode = DjiTest_FlightControlInit();
                 if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
                     USER_LOG_ERROR("DjiFcSubscription_SubscribeTopic %d return %d", DJI_FC_SUBSCRIPTION_TOPIC_QUATERNION, returnCode);
                     goto end;
@@ -273,7 +279,8 @@ start:
 
             if (aircraftSeries == DJI_AIRCRAFT_SERIES_M300 || aircraftSeries == DJI_AIRCRAFT_SERIES_M350) {
                 returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_THREE_GIMBAL_DATA, DJI_DATA_SUBSCRIPTION_TOPIC_50_HZ, NULL);
-                if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+                if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS &&
+            returnCode != DJI_ERROR_SUBSCRIPTION_MODULE_CODE_TOPIC_DUPLICATE) {
                     USER_LOG_ERROR("DjiFcSubscription_SubscribeTopic %d return %d", DJI_FC_SUBSCRIPTION_TOPIC_THREE_GIMBAL_DATA, returnCode);
                     goto end;
                 }
@@ -283,7 +290,8 @@ start:
                      aircraftSeries == DJI_AIRCRAFT_SERIES_M3D) {
                 topicOfPayloadGimablAngle = DJI_FC_SUBSCRIPTION_TOPIC_GIMBAL_ANGLES;
                 returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_GIMBAL_ANGLES, DJI_DATA_SUBSCRIPTION_TOPIC_50_HZ, NULL);
-                if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+                if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS &&
+            returnCode != DJI_ERROR_SUBSCRIPTION_MODULE_CODE_TOPIC_DUPLICATE) {
                     USER_LOG_ERROR("DjiFcSubscription_SubscribeTopic %d return %d", DJI_FC_SUBSCRIPTION_TOPIC_GIMBAL_ANGLES, returnCode);
                     goto end;
                 }
@@ -294,7 +302,8 @@ start:
                                             gimbalMountPosition == 3 ? DJI_FC_SUBSCRIPTION_TOPIC_GIMBAL_ANGLES_ON_POS_NO3 :
                                             gimbalMountPosition == 4 ? DJI_FC_SUBSCRIPTION_TOPIC_GIMBAL_ANGLES_ON_POS_NO4 : DJI_FC_SUBSCRIPTION_TOPIC_TOTAL_NUMBER;
                 returnCode = DjiFcSubscription_SubscribeTopic(topicOfPayloadGimablAngle, DJI_DATA_SUBSCRIPTION_TOPIC_50_HZ, NULL);
-                if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+                if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS &&
+            returnCode != DJI_ERROR_SUBSCRIPTION_MODULE_CODE_TOPIC_DUPLICATE) {
                     USER_LOG_ERROR("DjiFcSubscription_SubscribeTopic %d return %d", DJI_FC_SUBSCRIPTION_TOPIC_GIMBAL_ANGLES, returnCode);
                     goto end;
                 }

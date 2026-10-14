@@ -45,9 +45,8 @@ extern "C" {
 
 /* Exported constants --------------------------------------------------------*/
 //User can config dev based on there environmental conditions
-#define LINUX_UART_DEV1    "/dev/ttyAMA1"
-#define LINUX_UART_DEV2    "/dev/ttyAMA2"
-
+#define LINUX_UART_DEV1    "/dev/ttyAMA0"
+#define LINUX_UART_DEV2    "/dev/ttyAMA10"
 /**
  * Use for Eport 2.0, specify the VID and PID of the USB serial port closest to the aircraft.
  * FT232    0x0403:0x6001

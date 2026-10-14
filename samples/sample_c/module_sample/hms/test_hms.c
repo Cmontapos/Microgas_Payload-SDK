@@ -33,6 +33,7 @@
 #include "dji_logger.h"
 #include "dji_platform.h"
 #include "dji_fc_subscription.h"
+#include "flight_control/test_flight_control.h"
 #include "hms_text_c/en/hms_text_config_json.h"
 
 /* Private constants ---------------------------------------------------------*/
@@ -230,20 +231,14 @@ static T_DjiReturnCode DjiTest_HmsManagerInit(void)
     }
 #endif
 
-    returnCode = DjiFcSubscription_Init();
+    returnCode = DjiTest_FlightControlInit();
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Hms sample init data subscription module failed, error code:0x%08llX", returnCode);
         return returnCode;
     }
 
     /*! subscribe fc data */
-    returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_STATUS_FLIGHT,
-                                                  DJI_DATA_SUBSCRIPTION_TOPIC_10_HZ,
-                                                  NULL);
-    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
-        USER_LOG_ERROR("HMS sample subscribe topic flight status error, error code:0x%08llX", returnCode);
-        return returnCode;
-    }
+    /* STATUS_FLIGHT: se reutiliza la suscripcion de FlightControlInit. */
 
 #ifdef SYSTEM_ARCH_LINUX
 
@@ -283,7 +278,8 @@ static T_DjiReturnCode DjiTest_HmsManagerDeInit(void)
     T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
 #endif
 
-    returnCode = DjiFcSubscription_DeInit();
+    returnCode = MiniHawk_UsesFcSubscription() ? DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS :
+                 DjiFcSubscription_DeInit();
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Deinit data subscription module failed, error code:0x%08llX",
                        returnCode);

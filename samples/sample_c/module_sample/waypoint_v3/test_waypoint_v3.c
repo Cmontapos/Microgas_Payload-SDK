@@ -23,6 +23,7 @@
  */
 
 /* Includes ------------------------------------------------------------------*/
+#include "flight_control/test_flight_control.h"
 #include <utils/util_file.h>
 #include <utils/util_misc.h>
 #include "test_waypoint_v3.h"
@@ -152,9 +153,7 @@ close_file:
     kmzFile = NULL;
 #endif
 
-    returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_STATUS_FLIGHT,
-                                                  DJI_DATA_SUBSCRIPTION_TOPIC_10_HZ,
-                                                  NULL);
+    returnCode = DjiTest_FlightControlInit();
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Subscribe topic flight status failed, error code:0x%08llX", returnCode);
         goto out;

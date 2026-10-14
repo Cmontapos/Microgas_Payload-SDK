@@ -34,6 +34,12 @@
 #include "dji_fts.h"
 /* Private constants ---------------------------------------------------------*/
 
+/* MicroGas Includes ----------------------------------------------------------*/
+#include "microgas_data.h"
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+
 /* Private types -------------------------------------------------------------*/
 typedef struct {
     E_DjiFcSubscriptionDisplayMode displayMode;
@@ -45,6 +51,16 @@ static T_DjiOsalHandler *s_osalHandler = NULL;
 static const double s_earthCenter = 6378137.0;
 static const double s_degToRad = 0.01745329252;
 static bool s_isFtsCallbackRegistered = false;
+/* FlightControl es el unico propietario; conserva el modulo durante la aplicacion.
+ * 0: pendiente, 1: inicializando, 2: terminado (consultar resultado). */
+static int s_flightControlInitState = 0;
+static T_DjiReturnCode s_flightControlInitResult = DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+static int32_t s_miniHawkCo2Ppm = -1;
+static bool s_miniHawkStartAttempted = false;
+static int s_miniHawkStartResult = -1;
+static T_DjiTaskHandle s_miniHawkTask;
+static T_DjiSemaHandle s_miniHawkReady;
+
 static int32_t s_ftsTriggerCount = 0;
 static uint8_t s_mission_state_machine = 0;
 
@@ -61,6 +77,8 @@ static const T_DjiTestFlightControlDisplayModeStr s_flightControlDisplayModeStr[
 };
 
 /* Private functions declaration ---------------------------------------------*/
+static int MiniHawk_ReadDjiData(MicroGasData *data);
+static void *MiniHawk_AcquisitionTask(void *arg);
 static uint8_t DjiTest_FlightControlGetDisplayModeIndex(E_DjiFcSubscriptionDisplayMode displayMode);
 static T_DjiFcSubscriptionFlightStatus DjiTest_FlightControlGetValueOfFlightStatus(void);
 static T_DjiFcSubscriptionDisplaymode DjiTest_FlightControlGetValueOfDisplayMode(void);
@@ -92,7 +110,6 @@ static bool DjiTest_FlightControlMoveByPositionOffset(T_DjiTestFlightControlVect
                                                       float yawDesiredInDeg,
                                                       float posThresholdInM,
                                                       float yawThresholdInDeg);
-static T_DjiReturnCode DjiTest_FlightControlInit(void);
 static T_DjiReturnCode DjiTest_FlightControlDeInit(void);
 static void DjiTest_FlightControlTakeOffLandingSample(void);
 static void DjiTest_FlightControlPositionControlSample(void);
@@ -134,14 +151,244 @@ T_DjiReturnCode DjiTest_FlightControlRunSample(E_DjiTestFlightCtrlSampleSelect f
     return returnCode;
 }
 
+bool MiniHawk_UsesFcSubscription(void)
+{
+    return __atomic_load_n(&s_flightControlInitState, __ATOMIC_ACQUIRE) == 2 &&
+           s_flightControlInitResult == DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
+}
+
+int32_t MiniHawk_GetCo2Ppm(void)
+{
+    return __atomic_load_n(&s_miniHawkCo2Ppm, __ATOMIC_RELAXED);
+}
+
+int MiniHawk_StartAcquisition(void)
+{
+    T_DjiOsalHandler *osal = DjiPlatform_GetOsalHandler();
+
+    if (s_miniHawkStartAttempted) {
+        return s_miniHawkStartResult;
+    }
+    s_miniHawkStartAttempted = true;
+    /* Crear el lector solo cuando el flujo normal completo haya terminado. */
+    if (DjiTest_FlightControlInit() != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("MiniHawk: inicializacion de vuelo/suscripciones incompleta");
+        return -1;
+    }
+    if (osal == NULL ||
+        osal->SemaphoreCreate(0, &s_miniHawkReady) != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        return -1;
+    }
+    if (osal->TaskCreate("minihawk_data", MiniHawk_AcquisitionTask, 4096, NULL,
+                         &s_miniHawkTask) != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        osal->SemaphoreDestroy(s_miniHawkReady);
+        return -1;
+    }
+    /* Completar el arranque antes de permitir otras muestras de suscripcion. */
+    osal->SemaphoreWait(s_miniHawkReady);
+    osal->SemaphoreDestroy(s_miniHawkReady);
+    return s_miniHawkStartResult;
+}
+
+static int MiniHawk_ReadDjiData(MicroGasData *data)
+{
+    T_DjiFcSubscriptionGpsDate date = 0;
+    T_DjiFcSubscriptionGpsTime time = 0;
+    T_DjiFcSubscriptionPositionFused position = {0};
+    T_DjiDataTimestamp dateStamp = {0}, timeStamp = {0}, positionStamp = {0};
+    T_DjiReturnCode rc;
+    unsigned int year, month, day, hour, minute, second, daysInMonth;
+    static const unsigned int monthDays[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+
+    if (data == NULL || !MiniHawk_UsesFcSubscription()) {
+        return -1;
+    }
+
+    USER_LOG_INFO("MINIHAWK DEBUG: leyendo GPS_DATE");
+
+    rc = DjiFcSubscription_GetLatestValueOfTopic(
+        DJI_FC_SUBSCRIPTION_TOPIC_GPS_DATE,
+        (uint8_t *)&date,
+        sizeof(date),
+        &dateStamp);
+
+    if (rc != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_WARN("MINIHAWK DEBUG: GPS_DATE fallo 0x%08llX", rc);
+        return -1;
+    }
+
+    USER_LOG_INFO("MINIHAWK DEBUG: GPS_DATE OK");
+
+    USER_LOG_INFO("MINIHAWK DEBUG: leyendo GPS_TIME");
+
+    rc = DjiFcSubscription_GetLatestValueOfTopic(
+        DJI_FC_SUBSCRIPTION_TOPIC_GPS_TIME,
+        (uint8_t *)&time,
+        sizeof(time),
+        &timeStamp);
+
+    if (rc != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_WARN("MINIHAWK DEBUG: GPS_TIME fallo 0x%08llX", rc);
+        return -1;
+    }
+
+    USER_LOG_INFO("MINIHAWK DEBUG: GPS_TIME OK");
+
+    USER_LOG_INFO("MINIHAWK DEBUG: leyendo POSITION_FUSED");
+
+    rc = DjiFcSubscription_GetLatestValueOfTopic(
+        DJI_FC_SUBSCRIPTION_TOPIC_POSITION_FUSED,
+        (uint8_t *)&position,
+        sizeof(position),
+        &positionStamp);
+
+    if (rc != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_WARN("MINIHAWK DEBUG: POSITION_FUSED fallo 0x%08llX", rc);
+        return -1;
+    }
+
+    USER_LOG_INFO("MINIHAWK DEBUG: POSITION_FUSED OK");
+
+    year = date / 10000;
+    month = date / 100 % 100;
+    day = date % 100;
+    hour = time / 10000;
+    minute = time / 100 % 100;
+    second = time % 100;
+    if (year < 2000 || year > 9999 || month < 1 || month > 12 ||
+        hour > 23 || minute > 59 || second > 59) {
+        return -1;
+    }
+    daysInMonth = monthDays[month - 1];
+    if (month == 2 && year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) {
+        ++daysInMonth;
+    }
+    if (day < 1 || day > daysInMonth || position.visibleSatelliteNumber == 0 ||
+        !isfinite(position.latitude) || !isfinite(position.longitude) || !isfinite(position.altitude) ||
+        fabs(position.latitude) > M_PI / 2 || fabs(position.longitude) > M_PI) {
+        return -1;
+    }
+    snprintf(data->timestamp, sizeof(data->timestamp), "%04u-%02u-%02uT%02u:%02u:%02u",
+             year, month, day, hour, minute, second);
+    snprintf(data->hora, sizeof(data->hora), "%02u:%02u:%02u", hour, minute, second);
+    data->latitude_deg = position.latitude * 180.0 / M_PI;
+    data->longitude_deg = position.longitude * 180.0 / M_PI;
+    data->altitude_m = position.altitude; /* Elipsoide WGS84, no altura sobre el suelo. */
+    return 0;
+}
+
+static void *MiniHawk_AcquisitionTask(void *arg)
+{
+    T_DjiOsalHandler *osal = DjiPlatform_GetOsalHandler();
+    unsigned int skipped = 0;
+    (void)arg;
+
+    s_miniHawkStartResult = MicroGas_Sen66Init();
+    osal->SemaphorePost(s_miniHawkReady);
+    if (s_miniHawkStartResult != 0) {
+        USER_LOG_ERROR("MiniHawk: adquisicion desactivada; corregir el error y reiniciar la aplicacion");
+        return NULL;
+    }
+
+    while (true) {
+        MicroGasData data = {0};
+        uint32_t startMs = 0, endMs = 0;
+        bool saved = false;
+        osal->GetTimeMs(&startMs);
+
+        int djiResult = MiniHawk_ReadDjiData(&data);
+        int sensorResult = MicroGas_ReadSen66(&data);
+
+        /* Publicar CO2 aunque no haya GPS valido. */
+        __atomic_store_n(&s_miniHawkCo2Ppm,
+                         sensorResult == 0 ? data.co2_ppm : -1,
+                         __ATOMIC_RELAXED);
+        if (sensorResult == 0) {
+
+		if (djiResult != 0) {
+		    time_t now;
+		    struct tm localTime;
+
+		    data.latitude_deg = NAN;
+		    data.longitude_deg = NAN;
+		    data.altitude_m = NAN;
+
+		    time(&now);
+		    localtime_r(&now, &localTime);
+
+		    strftime(data.timestamp,
+		             sizeof(data.timestamp),
+		             "%Y-%m-%dT%H:%M:%S",
+		             &localTime);
+
+		    strftime(data.hora,
+		             sizeof(data.hora),
+		             "%H:%M:%S",
+		             &localTime);
+
+		    USER_LOG_WARN("MiniHawk: GPS no valido, usando hora del sistema");
+		}
+
+            USER_LOG_INFO(
+                "MiniHawk | CO2 %u ppm | Temp %.2f C | RH %.2f %% | "
+                "PM1 %.2f | PM2.5 %.2f | PM4 %.2f | PM10 %.2f | "
+                "VOC %.2f | NOx %.2f",
+                (unsigned int)data.co2_ppm,
+                data.temperature_c,
+                data.humidity_rh,
+                data.pm1_0,
+                data.pm2_5,
+                data.pm4_0,
+                data.pm10,
+                data.voc_index,
+                data.nox_index);
+
+            if (MicroGas_SaveCsv(&data) == 0) {
+                saved = true;
+            } else {
+                USER_LOG_ERROR("MiniHawk: error guardando CSV");
+            }
+
+        } else if (sensorResult == 1) {
+
+            USER_LOG_WARN("MiniHawk: SEN66 aun no tiene una muestra lista");
+
+        } else {
+
+            USER_LOG_ERROR("MiniHawk: error leyendo SEN66 rc=%d", sensorResult);
+        }
+
+        if (saved) {
+            skipped = 0;
+        } else if (skipped++ % 30 == 0) {
+            USER_LOG_WARN("MiniHawk: sin fila nueva del SEN66");
+        }
+        osal->GetTimeMs(&endMs);
+        uint32_t elapsedMs = endMs - startMs;
+        osal->TaskSleepMs(elapsedMs < 1000 ? 1000 - elapsedMs : 1000);
+    }
+    return NULL;
+}
+
 /* Private functions definition-----------------------------------------------*/
 T_DjiReturnCode DjiTest_FlightControlInit(void)
 {
     T_DjiReturnCode returnCode;
+    int expected = 0;
     T_DjiFlightControllerRidInfo ridInfo = {0};
 
-    s_osalHandler = DjiPlatform_GetOsalHandler();
-    if (!s_osalHandler) return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+    T_DjiOsalHandler *osal = DjiPlatform_GetOsalHandler();
+    if (!osal) return DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
+
+    /* Serializar llamadas del arranque y samples; un fallo requiere reiniciar. */
+    if (!__atomic_compare_exchange_n(&s_flightControlInitState, &expected, 1, false,
+                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        while (__atomic_load_n(&s_flightControlInitState, __ATOMIC_ACQUIRE) == 1) {
+            osal->TaskSleepMs(10);
+        }
+        return s_flightControlInitResult;
+    }
+    s_osalHandler = osal;
 
     ridInfo.latitude = 22.542812;
     ridInfo.longitude = 113.958902;
@@ -150,19 +397,19 @@ T_DjiReturnCode DjiTest_FlightControlInit(void)
     returnCode = DjiFlightController_Init(ridInfo);
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Init flight controller module failed, error code:0x%08llX", returnCode);
-        return returnCode;
+        goto out;
     }
 
     returnCode = DjiFcSubscription_Init();
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Init data subscription module failed, error code:0x%08llX", returnCode);
-        return returnCode;
+        goto out;
     }
 
     returnCode = DjiFlightController_SetRCLostActionEnableStatus(DJI_FLIGHT_CONTROLLER_DISABLE_RC_LOST_ACTION);
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Set RC lost action failed, error code:0x%08llX", returnCode);
-        return returnCode;
+        goto out;
     }
 
     /*! subscribe fc data */
@@ -172,7 +419,7 @@ T_DjiReturnCode DjiTest_FlightControlInit(void)
 
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Subscribe topic flight status failed, error code:0x%08llX", returnCode);
-        return returnCode;
+        goto out;
     }
 
     returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_STATUS_DISPLAYMODE,
@@ -181,7 +428,7 @@ T_DjiReturnCode DjiTest_FlightControlInit(void)
 
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Subscribe topic display mode failed, error code:0x%08llX", returnCode);
-        return returnCode;
+        goto out;
     }
 
     returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_HEIGHT_FUSION,
@@ -190,7 +437,7 @@ T_DjiReturnCode DjiTest_FlightControlInit(void)
 
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Subscribe topic avoid data failed,error code:0x%08llX", returnCode);
-        return returnCode;
+        goto out;
     }
 
     returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_QUATERNION,
@@ -202,7 +449,7 @@ T_DjiReturnCode DjiTest_FlightControlInit(void)
         USER_LOG_WARN("Subscribe topic quaternion duplicate");
     } else {
         USER_LOG_ERROR("Subscribe topic quaternion failed,error code:0x%08llX", returnCode);
-        return returnCode;
+        goto out;
     }
 
     returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_POSITION_FUSED,
@@ -211,7 +458,7 @@ T_DjiReturnCode DjiTest_FlightControlInit(void)
 
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Subscribe topic position fused failed,error code:0x%08llX", returnCode);
-        return returnCode;
+        goto out;
     }
 
     returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_ALTITUDE_FUSED,
@@ -220,7 +467,7 @@ T_DjiReturnCode DjiTest_FlightControlInit(void)
 
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Subscribe topic altitude fused failed,error code:0x%08llX", returnCode);
-        return returnCode;
+        goto out;
     }
 
     returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_ALTITUDE_OF_HOMEPOINT,
@@ -229,7 +476,7 @@ T_DjiReturnCode DjiTest_FlightControlInit(void)
 
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
         USER_LOG_ERROR("Subscribe topic altitude of home point failed,error code:0x%08llX", returnCode);
-        return returnCode;
+        goto out;
     }
 
     returnCode = DjiFlightController_RegJoystickCtrlAuthorityEventCallback(
@@ -237,15 +484,37 @@ T_DjiReturnCode DjiTest_FlightControlInit(void)
 
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS && returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_NONSUPPORT) {
         USER_LOG_ERROR("Register joystick control authority event callback failed,error code:0x%08llX", returnCode);
-        return returnCode;
+        goto out;
     }
 
-    return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
+    returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_DATE,
+                                                 DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ, NULL);
+    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("Subscribe topic GPS date failed, error code:0x%08llX", returnCode);
+        goto out;
+    }
+
+    returnCode = DjiFcSubscription_SubscribeTopic(DJI_FC_SUBSCRIPTION_TOPIC_GPS_TIME,
+                                                 DJI_DATA_SUBSCRIPTION_TOPIC_1_HZ, NULL);
+    if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
+        USER_LOG_ERROR("Subscribe topic GPS time failed, error code:0x%08llX", returnCode);
+        goto out;
+    }
+
+out:
+    s_flightControlInitResult = returnCode;
+    __atomic_store_n(&s_flightControlInitState, 2, __ATOMIC_RELEASE);
+    return returnCode;
 }
 
 T_DjiReturnCode DjiTest_FlightControlDeInit(void)
 {
     T_DjiReturnCode returnCode;
+
+    /* Los lectores comparten este modulo hasta que termine la aplicacion. */
+    if (MiniHawk_UsesFcSubscription()) {
+        return DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS;
+    }
 
     returnCode = DjiFlightController_DeInit();
     if (returnCode != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {

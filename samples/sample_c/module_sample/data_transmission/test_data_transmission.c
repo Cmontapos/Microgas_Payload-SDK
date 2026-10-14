@@ -218,7 +218,7 @@ T_DjiReturnCode DjiTest_DataTransmissionStopService(void)
 static void *UserDataTransmission_Task(void *arg)
 {
     T_DjiReturnCode djiStat;
-    const uint8_t dataToBeSent[] = "DJI Data Transmission Test Data.";
+    const uint8_t dataToBeSent[] = "Hola GasLab, Soy Minihawk Mavic 3T";
     T_DjiDataChannelState state = {0};
     T_DjiOsalHandler *osalHandler = DjiPlatform_GetOsalHandler();
     E_DjiChannelAddress channelAddress;

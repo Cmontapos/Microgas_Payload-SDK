@@ -1,0 +1,15 @@
+[Unit]
+Description=Exportar CSV MiniHawk a USB %I
+BindsTo=dev-%i.device
+After=dev-%i.device
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/minihawk-usb-export %I
+User=root
+UMask=0077
+RuntimeDirectory=minihawk-usb-export-%i
+RuntimeDirectoryMode=0700
+PrivateMounts=yes
+TimeoutStartSec=10min
+TimeoutStopSec=30s

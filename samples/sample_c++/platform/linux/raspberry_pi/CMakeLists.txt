@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.5)
-project(dji_sdk_demo_on_rpi_cxx CXX)
+# project(dji_sdk_demo_on_rpi_cxx CXX)
+project(dji_sdk_demo_on_rpi_cxx C CXX)
 
 set(CMAKE_C_FLAGS "-pthread -std=gnu99")
 set(CMAKE_CXX_FLAGS "-std=c++11 -pthread")
@@ -7,6 +8,7 @@ set(CMAKE_EXE_LINKER_FLAGS "-pthread")
 set(CMAKE_C_COMPILER "aarch64-linux-gnu-gcc")
 set(CMAKE_CXX_COMPILER "aarch64-linux-gnu-g++")
 add_definitions(-D_GNU_SOURCE)
+add_definitions(-DSYSTEM_ARCH_LINUX)
 
 if (MEMORY_LEAK_CHECK_ON MATCHES TRUE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=leak")
@@ -119,9 +121,10 @@ if (BUILD_CROSS_COMPILE MATCHES TRUE)
     endif (LIBUSB_FOUND)
 endif()
 
-if (NOT EXECUTABLE_OUTPUT_PATH)
-    set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR}/bin)
-endif ()
+# MiniHawk's boot service always executes this path, even when CMake uses
+# a separate directory for cross-compilation intermediates.
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/build/bin")
 
 target_link_libraries(${PROJECT_NAME} m dl)
 
@@ -129,4 +132,3 @@ target_include_directories(${PROJECT_NAME} PRIVATE ${OpenCV_INCLUDE_DIRS})
 if (OpenCV_FOUND)
     target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS})
 endif ()
-
