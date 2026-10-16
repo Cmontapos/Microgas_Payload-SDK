@@ -29,6 +29,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "dji_typedef.h"
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -67,6 +68,8 @@ int MiniHawk_StartAcquisition(void);
 bool MiniHawk_UsesFcSubscription(void);
 /* Ultima lectura real del SEN66; -1 si no hay una muestra valida. */
 int32_t MiniHawk_GetCo2Ppm(void);
+/* Copia la ultima linea MG3 (ver microgas_sender.h); cadena vacia si aun no hay muestra. */
+void MiniHawk_GetWindowLine(char *out, size_t size);
 /* Inicializacion unica compartida por los samples; conserva el modulo. */
 T_DjiReturnCode DjiTest_FlightControlInit(void);
 T_DjiReturnCode DjiTest_FlightControlRunSample(E_DjiTestFlightCtrlSampleSelect flightCtrlSampleSelect);

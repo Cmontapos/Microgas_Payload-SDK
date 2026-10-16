@@ -33,6 +33,8 @@
 #include "file_binary_array_list_en.h"
 #include <stdarg.h>
 #include "flight_control/test_flight_control.h"
+#include "flight_control/microgas_sender.h"
+#include <string.h>
 #include <stdint.h>
 
 /* Rango de salida SEN66:
@@ -638,6 +640,7 @@ void *DjiTest_WidgetTask(void *arg)
     char message[
         DJI_WIDGET_FLOATING_WINDOW_MSG_MAX_LEN + 1
     ];
+    char windowLine[MICROGAS_WINDOW_LINE_MAX];
 
 
     USER_UTIL_UNUSED(arg);
@@ -652,6 +655,24 @@ void *DjiTest_WidgetTask(void *arg)
             message,
             sizeof(message),
             MiniHawk_GetCo2Ppm());
+
+
+        /*
+         * Agregar la linea MG3 que lee la app MicroGas del control
+         * (todas las variables + GPS). Sin muestra valida no se agrega.
+         */
+        MiniHawk_GetWindowLine(
+            windowLine,
+            sizeof(windowLine));
+
+        if (windowLine[0] != '\0') {
+            size_t used = strlen(message);
+            snprintf(
+                message + used,
+                sizeof(message) - used,
+                "\n%s",
+                windowLine);
+        }
 
 
         /*
@@ -672,9 +693,11 @@ void *DjiTest_WidgetTask(void *arg)
 
 
         /*
-         * Actualizar una vez por segundo.
+         * Actualizar dos veces por segundo: con muestras a ~1 Hz evita
+         * que el control se salte una muestra por desfase (~340 B/s,
+         * por debajo del limite de 2 KB/s de la ventana flotante).
          */
-        osalHandler->TaskSleepMs(1000);
+        osalHandler->TaskSleepMs(500);
     }
 
 

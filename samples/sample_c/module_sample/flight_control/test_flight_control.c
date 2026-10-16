@@ -29,6 +29,7 @@
 #include "dji_platform.h"
 #include "dji_logger.h"
 #include <math.h>
+#include <pthread.h>
 #include <widget_interaction_test/test_widget_interaction.h>
 #include <dji_aircraft_info.h>
 #include "dji_fts.h"
@@ -59,6 +60,9 @@ static bool s_isFtsCallbackRegistered = false;
 static int s_flightControlInitState = 0;
 static T_DjiReturnCode s_flightControlInitResult = DJI_ERROR_SYSTEM_MODULE_CODE_UNKNOWN;
 static int32_t s_miniHawkCo2Ppm = -1;
+/* Ultima linea MG3 para la ventana flotante; vacia hasta la primera muestra valida. */
+static char s_miniHawkWindowLine[MICROGAS_WINDOW_LINE_MAX];
+static pthread_mutex_t s_miniHawkWindowLineLock = PTHREAD_MUTEX_INITIALIZER;
 static bool s_miniHawkStartAttempted = false;
 static int s_miniHawkStartResult = -1;
 static T_DjiTaskHandle s_miniHawkTask;
@@ -165,6 +169,16 @@ bool MiniHawk_UsesFcSubscription(void)
 int32_t MiniHawk_GetCo2Ppm(void)
 {
     return __atomic_load_n(&s_miniHawkCo2Ppm, __ATOMIC_RELAXED);
+}
+
+void MiniHawk_GetWindowLine(char *out, size_t size)
+{
+    if (out == NULL || size == 0) {
+        return;
+    }
+    pthread_mutex_lock(&s_miniHawkWindowLineLock);
+    snprintf(out, size, "%s", s_miniHawkWindowLine);
+    pthread_mutex_unlock(&s_miniHawkWindowLineLock);
 }
 
 int MiniHawk_StartAcquisition(void)
@@ -386,11 +400,25 @@ static void *MiniHawk_AcquisitionTask(void *arg)
                 .voc_index = data.voc_index,
                 .nox_index = data.nox_index,
             };
+            const uint64_t uptimeMs = MiniHawk_MonotonicMs() - startMonotonicMs;
+            ++sequence;
             T_DjiReturnCode sendResult = MicroGas_SendMeasurement(
-                bootId, ++sequence, MiniHawk_MonotonicMs() - startMonotonicMs, &measurement);
+                bootId, sequence, uptimeMs, &measurement);
             if (sendResult != DJI_ERROR_SYSTEM_MODULE_CODE_SUCCESS) {
                 USER_LOG_WARN("MiniHawk: envio PSDK al control fallo 0x%08llX",
                               (unsigned long long)sendResult);
+            }
+
+            /* La app del control lee esta linea desde la ventana flotante de Pilot 2 (sin MSDK). */
+            char windowLine[MICROGAS_WINDOW_LINE_MAX];
+            if (MicroGas_EncodeWindowLine(windowLine, sizeof(windowLine), bootId, sequence, uptimeMs,
+                                          &measurement, data.latitude_deg, data.longitude_deg,
+                                          data.altitude_m) > 0) {
+                pthread_mutex_lock(&s_miniHawkWindowLineLock);
+                memcpy(s_miniHawkWindowLine, windowLine, sizeof(s_miniHawkWindowLine));
+                pthread_mutex_unlock(&s_miniHawkWindowLineLock);
+            } else {
+                USER_LOG_WARN("MiniHawk: no se pudo codificar la linea MG3");
             }
 
             if (MicroGas_SaveCsv(&data) == 0) {
